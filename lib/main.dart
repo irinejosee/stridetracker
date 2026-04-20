@@ -196,6 +196,8 @@ class HomeScreen extends StatelessWidget {
     double calories = steps * 0.04;
     double km = steps * 0.0008;
 
+    bool isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+
     return RefreshIndicator(
       onRefresh: onRefresh,
       color: const Color(0xFFA855F7),
@@ -220,13 +222,13 @@ class HomeScreen extends StatelessWidget {
               physics: const AlwaysScrollableScrollPhysics(),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  minHeight: MediaQuery.of(context).size.height - 90, // Navbar height approx
+                  minHeight: MediaQuery.of(context).size.height - (isLandscape ? 70 : 90), 
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24.0),
                   child: Column(
                     children: [
-                      const SizedBox(height: 60), // Account for header/safearea
+                      SizedBox(height: isLandscape ? 20 : 60), 
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -245,7 +247,7 @@ class HomeScreen extends StatelessWidget {
                               Text(
                                 DateFormat('MMM d, yyyy').format(DateTime.now()),
                                 style: GoogleFonts.outfit(
-                                  fontSize: 26,
+                                  fontSize: isLandscape ? 20 : 26,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
@@ -255,15 +257,16 @@ class HomeScreen extends StatelessWidget {
                           _NeonStatusPill(status: status),
                         ],
                       ),
-                      const SizedBox(height: 60),
+                      SizedBox(height: isLandscape ? 30 : 60),
                       Center(
                         child: NeonCircularIndicator(
                           progress: progress,
                           steps: steps,
                           goal: goal,
+                          size: isLandscape ? 200 : 280, // Scale down in landscape
                         ),
                       ),
-                      const SizedBox(height: 60),
+                      SizedBox(height: isLandscape ? 30 : 60),
                       Row(
                         children: [
                           Expanded(
@@ -338,12 +341,14 @@ class NeonCircularIndicator extends StatefulWidget {
   final double progress;
   final int steps;
   final int goal;
+  final double size;
 
   const NeonCircularIndicator({
     super.key,
     required this.progress,
     required this.steps,
     required this.goal,
+    this.size = 280,
   });
 
   @override
@@ -392,22 +397,22 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
           children: [
             // Inner Glow
             Container(
-              width: 160,
-              height: 160,
+              width: widget.size * 0.6,
+              height: widget.size * 0.6,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
                     color: const Color(0xFFA855F7).withOpacity(0.3),
-                    blurRadius: 60,
-                    spreadRadius: 20,
+                    blurRadius: widget.size * 0.2,
+                    spreadRadius: widget.size * 0.05,
                   ),
                 ],
               ),
             ),
             SizedBox(
-              width: 280,
-              height: 280,
+              width: widget.size,
+              height: widget.size,
               child: CustomPaint(
                 painter: _NeonProgressPainter(
                   progress: _animation.value,
@@ -426,7 +431,7 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
                   child: Text(
                     NumberFormat('#,###').format(widget.steps),
                     style: GoogleFonts.outfit(
-                      fontSize: 56,
+                      fontSize: widget.size * 0.2, // Scaling font size
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
                     ),
@@ -435,23 +440,23 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
                 Text(
                   'Steps Taken',
                   style: GoogleFonts.outfit(
-                    fontSize: 14,
+                    fontSize: widget.size * 0.05, // Scaling font size
                     fontWeight: FontWeight.w600,
                     color: Colors.white30,
                     letterSpacing: 2,
                   ),
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: widget.size * 0.04),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white10),
+                    border: Border.all(color: Colors.white.withOpacity(0.1)),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     'Goal: ${widget.goal}',
                     style: GoogleFonts.outfit(
-                      fontSize: 12,
+                      fontSize: widget.size * 0.04,
                       color: Colors.white54,
                     ),
                   ),
