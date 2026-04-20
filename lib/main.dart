@@ -26,9 +26,9 @@ class StrideTrackApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF000000),
         colorScheme: ColorScheme.dark(
-          primary: const Color(0xFFA855F7), // Neon Purple
-          secondary: const Color(0xFFE11D48), // Neon Rose/Pink
-          surface: const Color(0xFF0F172A), // Dark slate surface
+          primary: const Color(0xFFA855F7),
+          secondary: const Color(0xFFE11D48),
+          surface: const Color(0xFF0F172A),
         ),
         textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme),
       ),
@@ -49,7 +49,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _todaySteps = 0;
   String _status = 'Stopped';
   late Stream<StepCount> _stepCountStream;
-  int _baseStepCount = -1;
 
   @override
   void initState() {
@@ -77,25 +76,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   void _onStepCount(StepCount event) async {
     final prefs = await SharedPreferences.getInstance();
-    final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    
-    // 1. Check for day change
     await _checkMidnightReset();
 
     int currentSensorSteps = event.steps;
     int lastSensorValue = prefs.getInt('last_sensor_value') ?? currentSensorSteps;
     int totalToday = prefs.getInt('today_steps_live') ?? 0;
 
-    // 2. Calculate the difference (delta)
     int delta = currentSensorSteps - lastSensorValue;
 
-    // 3. Handle Sensor Reset (Reboot)
-    // If delta is negative, the phone likely rebooted and the sensor started from 0
     if (delta < 0) {
       delta = currentSensorSteps;
     }
 
-    // 4. Update the running total for today
     if (delta > 0) {
       totalToday += delta;
     }
@@ -105,7 +97,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       _status = 'Walking';
     });
 
-    // 5. Save state for next update
     await prefs.setInt('last_sensor_value', currentSensorSteps);
     await prefs.setInt('today_steps_live', totalToday);
   }
@@ -120,20 +111,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
     if (lastCheck != '' && lastCheck != todayStr) {
-      // Midnight happened!
       final finalSteps = prefs.getInt('today_steps_live') ?? 0;
-      
-      // Save yesterday's data to history
       List<String> history = prefs.getStringList('step_history') ?? [];
       history.insert(0, jsonEncode({'date': lastCheck, 'steps': finalSteps}));
       if (history.length > 30) history = history.sublist(0, 30);
-      
       await prefs.setStringList('step_history', history);
-      
-      // Reset daily counter
       await prefs.setInt('today_steps_live', 0);
-      
-      // Note: We keep 'last_sensor_value' so the next event calculates correctly
       setState(() => _todaySteps = 0);
     }
     await prefs.setString('last_check_date', todayStr);
@@ -195,7 +178,6 @@ class HomeScreen extends StatelessWidget {
     double progress = (steps / goal).clamp(0.0, 1.0);
     double calories = steps * 0.04;
     double km = steps * 0.0008;
-
     bool isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
 
     return RefreshIndicator(
@@ -207,7 +189,6 @@ class HomeScreen extends StatelessWidget {
         decoration: const BoxDecoration(color: Colors.black),
         child: Stack(
           children: [
-            // Background Glows
             Positioned(
               top: -150,
               right: -100,
@@ -222,13 +203,13 @@ class HomeScreen extends StatelessWidget {
               physics: const AlwaysScrollableScrollPhysics(),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  minHeight: MediaQuery.of(context).size.height - (isLandscape ? 70 : 90), 
+                  minHeight: MediaQuery.of(context).size.height - (isLandscape ? 70 : 90),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24.0),
                   child: Column(
                     children: [
-                      SizedBox(height: isLandscape ? 20 : 60), 
+                      SizedBox(height: isLandscape ? 20 : 60),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -263,7 +244,7 @@ class HomeScreen extends StatelessWidget {
                           progress: progress,
                           steps: steps,
                           goal: goal,
-                          size: isLandscape ? 200 : 280, // Scale down in landscape
+                          size: isLandscape ? 200 : 280,
                         ),
                       ),
                       SizedBox(height: isLandscape ? 30 : 60),
@@ -291,7 +272,6 @@ class HomeScreen extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 40),
-                      // Added Motivation Text
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(20),
@@ -395,7 +375,6 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
         return Stack(
           alignment: Alignment.center,
           children: [
-            // Inner Glow
             Container(
               width: widget.size * 0.6,
               height: widget.size * 0.6,
@@ -431,7 +410,7 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
                   child: Text(
                     NumberFormat('#,###').format(widget.steps),
                     style: GoogleFonts.outfit(
-                      fontSize: widget.size * 0.2, // Scaling font size
+                      fontSize: widget.size * 0.2,
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
                     ),
@@ -440,7 +419,7 @@ class _NeonCircularIndicatorState extends State<NeonCircularIndicator> with Tick
                 Text(
                   'Steps Taken',
                   style: GoogleFonts.outfit(
-                    fontSize: widget.size * 0.05, // Scaling font size
+                    fontSize: widget.size * 0.05,
                     fontWeight: FontWeight.w600,
                     color: Colors.white30,
                     letterSpacing: 2,
@@ -487,7 +466,6 @@ class _NeonProgressPainter extends CustomPainter {
     final radius = math.min(size.width, size.height) / 2;
     const strokeWidth = 14.0;
 
-    // Track
     canvas.drawCircle(
       center,
       radius - strokeWidth / 2,
@@ -497,7 +475,6 @@ class _NeonProgressPainter extends CustomPainter {
         ..strokeWidth = strokeWidth,
     );
 
-    // Glow Effect
     final glowPaint = Paint()
       ..color = color.withOpacity(0.5)
       ..style = PaintingStyle.stroke
@@ -514,7 +491,6 @@ class _NeonProgressPainter extends CustomPainter {
       glowPaint,
     );
 
-    // Primary Stroke
     final strokePaint = Paint()
       ..shader = LinearGradient(
         colors: [color, color.withBlue(255).withRed(255)],
