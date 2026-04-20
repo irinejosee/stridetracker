@@ -31,13 +31,16 @@ StrideTrack is a premium, high-performance Flutter pedometer application designe
 
 ---
 
-## 🏗️ Architecture: The "Precision" Algorithm
+## 🏗️ Architecture: Custom Accelerometer-based Step Detection
 
-StrideTrack uses an **Incremental Delta System** instead of simple cumulative subtraction. 
+StrideTrack uses a specialized **Digital Signal Processing (DSP)** pipeline to detect steps from raw accelerometer data:
 
-1. **Delta Calculation**: It measures the difference between every sensor broadcast.
-2. **Reboot Protection**: If the hardware counter resets to 0 (after a device restart), the app detects the drop and "stitches" the new steps onto the existing daily total.
-3. **Persistence**: The app saves the last known sensor state every few minutes, ensuring that even if the app is killed by the OS, your steps are "caught up" the next time you open it.
+1.  **Gravity removal**: Uses a low-pass filter to isolate linear acceleration.
+2.  **Noise filtering**: Applies a moving average buffer to smooth jitter.
+3.  **Peak detection**: Identifies local maxima using a sliding 3-point window.
+4.  **Adaptive thresholding**: Dynamically adjusts sensitivity based on recent signal energy.
+5.  **Gating logic**: Enforces realistic human step intervals (250ms - 2000ms).
+6.  **Continuous Walking Verification**: Only counts steps after a pattern of 5 consecutive strides is confirmed, eliminating false positives from incidental movement.
 
 ---
 

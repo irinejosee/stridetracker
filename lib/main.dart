@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:pedometer/pedometer.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:animations/animations.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import 'step_detector.dart';
 
 void main() {
   runApp(const StrideTrackApp());
@@ -48,16 +49,28 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   int _todaySteps = 0;
   String _status = 'Stopped';
-  late Stream<StepCount> _stepCountStream;
+  late StepDetector _stepDetector;
+  StreamSubscription? _accelerometerSubscription;
+  StreamSubscription? _stepSubscription;
+  Timer? _stopTimer;
 
   @override
   void initState() {
     super.initState();
-    _initPedometer();
+    _stepDetector = StepDetector();
+    _initTracker();
     _checkMidnightReset();
+    _loadInitialSteps();
   }
 
-  Future<void> _initPedometer() async {
+  Future<void> _loadInitialSteps() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _todaySteps = prefs.getInt('today_steps_live') ?? 0;
+    });
+  }
+
+  Future<void> _initTracker() async {
     if (await Permission.activityRecognition.request().isGranted) {
       _startListening();
     } else {
@@ -66,43 +79,47 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _startListening() {
-    _stepCountStream = Pedometer.stepCountStream;
-    _stepCountStream.listen(
-      _onStepCount,
-      onError: _onStepCountError,
-      cancelOnError: false,
+    _accelerometerSubscription?.cancel();
+    _stepSubscription?.cancel();
+
+    // Listen to raw accelerometer data
+    _accelerometerSubscription = accelerometerEventStream().listen(
+      (AccelerometerEvent event) {
+        _stepDetector.processAccelerometerEvent(event);
+      },
     );
+
+    // Listen to processed step events
+    _stepSubscription = _stepDetector.stepStream.listen((_) {
+      _onStepDetected();
+    });
   }
 
-  void _onStepCount(StepCount event) async {
+  void _onStepDetected() async {
     final prefs = await SharedPreferences.getInstance();
     await _checkMidnightReset();
 
-    int currentSensorSteps = event.steps;
-    int lastSensorValue = prefs.getInt('last_sensor_value') ?? currentSensorSteps;
-    int totalToday = prefs.getInt('today_steps_live') ?? 0;
-
-    int delta = currentSensorSteps - lastSensorValue;
-
-    if (delta < 0) {
-      delta = currentSensorSteps;
-    }
-
-    if (delta > 0) {
-      totalToday += delta;
-    }
-
     setState(() {
-      _todaySteps = totalToday;
+      _todaySteps++;
       _status = 'Walking';
     });
 
-    await prefs.setInt('last_sensor_value', currentSensorSteps);
-    await prefs.setInt('today_steps_live', totalToday);
+    await prefs.setInt('today_steps_live', _todaySteps);
+
+    // Reset status to "Stopped" after 2 seconds of inactivity
+    _stopTimer?.cancel();
+    _stopTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _status = 'Stopped');
+    });
   }
 
-  void _onStepCountError(error) {
-    setState(() => _status = 'Sensor Error');
+  @override
+  void dispose() {
+    _accelerometerSubscription?.cancel();
+    _stepSubscription?.cancel();
+    _stepDetector.dispose();
+    _stopTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _checkMidnightReset() async {
@@ -129,7 +146,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         steps: _todaySteps,
         status: _status,
         onRefresh: () async {
-          await _initPedometer();
+          await _initTracker();
           await _checkMidnightReset();
           final prefs = await SharedPreferences.getInstance();
           setState(() {
