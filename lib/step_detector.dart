@@ -8,7 +8,10 @@ class StepDetector {
   static const int _minStepIntervalMs = 250;
   static const int _maxStepIntervalMs = 2000;
   static const int _bufferSize = 20; // Size for moving average and thresholding
-  static const int _requiredWalkingSteps = 5; // Steps needed to confirm walking
+  static const int _requiredWalkingSteps = 6; // Increased from 5 to 6 for better pattern confirmation
+  static const double _minPeakAmplitude = 1.2; // Minimum amplitude (m/s^2) for a valid step peak
+  static const double _maxValidVariance = 15.0; // Too much variance might be intense shaking
+  static const double _minValidVariance = 0.05; // Too little variance is just idling/fidgeting
 
   // Stream controller for step events
   final _stepController = StreamController<int>.broadcast();
@@ -50,15 +53,34 @@ class StepDetector {
     _updateThreshold();
 
     // Check for peak using a 3-point local window (i-1, i, i+1)
-    // We check if the point at index N-2 is a peak relative to its neighbors
     int i = _magnitudeBuffer.length - 2;
     double prev = _magnitudeBuffer[i - 1];
     double curr = _magnitudeBuffer[i];
     double next = _magnitudeBuffer[i + 1];
 
     if (curr > _dynamicThreshold && curr > prev && curr > next) {
-      _handlePotentialStep();
+      // 5. Additional Validation for Fake Motion
+      if (_isValidStepSignal(curr)) {
+        _handlePotentialStep();
+      }
     }
+  }
+
+  bool _isValidStepSignal(double peakValue) {
+    // Check 1: Minimum Peak Amplitude (Filters out subtle fidgeting)
+    double minInBuf = _magnitudeBuffer.reduce(math.min);
+    double amplitude = peakValue - minInBuf;
+    if (amplitude < _minPeakAmplitude) return false;
+
+    // Check 2: Signal Variance (Filters out constant engine vibration or random noise)
+    double mean = _magnitudeBuffer.reduce((a, b) => a + b) / _bufferSize;
+    double variance = _magnitudeBuffer.map((x) => math.pow(x - mean, 2)).reduce((a, b) => a + b) / _bufferSize;
+
+    if (variance < _minValidVariance || variance > _maxValidVariance) {
+      return false; // Signal is either too flat (idle) or too chaotic (random shaking)
+    }
+
+    return true;
   }
 
   void _updateThreshold() {
