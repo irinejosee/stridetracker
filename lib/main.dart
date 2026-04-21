@@ -633,6 +633,7 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _history = [];
+  int _currentWeekIndex = 0; // 0 is the most recent week
 
   @override
   void initState() {
@@ -648,8 +649,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
     });
   }
 
+  List<List<Map<String, dynamic>>> _getWeeklyChunks() {
+    if (_history.isEmpty) return [];
+    List<List<Map<String, dynamic>>> chunks = [];
+    for (int i = 0; i < _history.length; i += 7) {
+      int end = (i + 7 > _history.length) ? _history.length : i + 7;
+      chunks.add(_history.sublist(i, end));
+    }
+    return chunks;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final weeklyChunks = _getWeeklyChunks();
+    final currentWeek = weeklyChunks.isNotEmpty && _currentWeekIndex < weeklyChunks.length 
+        ? weeklyChunks[_currentWeekIndex] 
+        : <Map<String, dynamic>>[];
+
     return Container(
       color: Colors.black,
       child: SafeArea(
@@ -667,10 +683,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
               ),
             ),
-            if (_history.isNotEmpty)
+            if (weeklyChunks.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16),
-                child: _NeonBarChart(history: _history.reversed.take(7).toList().reversed.toList()),
+                child: _NeonBarChart(
+                  weekData: currentWeek.reversed.toList(),
+                  showPrev: _currentWeekIndex < weeklyChunks.length - 1,
+                  showNext: _currentWeekIndex > 0,
+                  onPrev: () => setState(() => _currentWeekIndex++),
+                  onNext: () => setState(() => _currentWeekIndex--),
+                ),
               ),
             Expanded(
               child: _history.isEmpty
@@ -702,39 +724,34 @@ class _HistoryScreenState extends State<HistoryScreen> {
 }
 
 class _NeonBarChart extends StatelessWidget {
-  final List<Map<String, dynamic>> history;
-  static const int weeklyGoal = 70000; // 10k/day * 7
+  final List<Map<String, dynamic>> weekData;
+  final bool showPrev;
+  final bool showNext;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  
+  static const int maxGoal = 10000;
 
-  const _NeonBarChart({required this.history});
-
-  List<Map<String, dynamic>> _getWeeklyData() {
-    if (history.isEmpty) return [];
-    
-    // Group history into 7-day chunks (weeks)
-    List<Map<String, dynamic>> weeks = [];
-    for (int i = 0; i < history.length; i += 7) {
-      int end = (i + 7 > history.length) ? history.length : i + 7;
-      List<Map<String, dynamic>> weekChunk = history.sublist(i, end);
-      int totalSteps = weekChunk.fold(0, (sum, day) => sum + (day['steps'] as int));
-      
-      // Use the date of the first day in the chunk as label
-      weeks.add({
-        'week': 'W${(i / 7).toInt() + 1}',
-        'steps': totalSteps,
-        'label': 'Week ${(i / 7).toInt() + 1}'
-      });
-    }
-    // Return last 4 weeks
-    return weeks.reversed.take(4).toList().reversed.toList();
-  }
+  const _NeonBarChart({
+    required this.weekData,
+    required this.showPrev,
+    required this.showNext,
+    required this.onPrev,
+    required this.onNext,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final weeklyData = _getWeeklyData();
-    
+    String rangeText = '---';
+    if (weekData.isNotEmpty) {
+      final start = DateTime.parse(weekData.first['date']);
+      final end = DateTime.parse(weekData.last['date']);
+      rangeText = '${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d').format(end)}';
+    }
+
     return Container(
-      height: 200,
-      padding: const EdgeInsets.all(24),
+      height: 220,
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(28),
@@ -745,8 +762,26 @@ class _NeonBarChart extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Weekly Progress', style: GoogleFonts.outfit(fontSize: 12, color: Colors.white38, fontWeight: FontWeight.bold, letterSpacing: 1)),
-              const Icon(Icons.bar_chart_rounded, size: 16, color: Colors.white24),
+              IconButton(
+                onPressed: showPrev ? onPrev : null,
+                icon: Icon(Icons.chevron_left_rounded, color: showPrev ? Colors.white : Colors.white10),
+              ),
+              Column(
+                children: [
+                  Text(
+                    'WEEKLY OVERVIEW',
+                    style: GoogleFonts.outfit(fontSize: 10, color: const Color(0xFFA855F7), fontWeight: FontWeight.w900, letterSpacing: 2),
+                  ),
+                  Text(
+                    rangeText,
+                    style: GoogleFonts.outfit(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              IconButton(
+                onPressed: showNext ? onNext : null,
+                icon: Icon(Icons.chevron_right_rounded, color: showNext ? Colors.white : Colors.white10),
+              ),
             ],
           ),
           const SizedBox(height: 20),
@@ -754,61 +789,55 @@ class _NeonBarChart extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               crossAxisAlignment: CrossAxisAlignment.end,
-              children: weeklyData.isEmpty 
-                ? [Center(child: Text('Not enough data', style: GoogleFonts.outfit(color: Colors.white24, fontSize: 12)))]
-                : weeklyData.map((week) {
-                  final steps = week['steps'] as int;
-                  final double progress = (steps / weeklyGoal).clamp(0.1, 1.0);
-                  
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Text(
-                        '${(steps / 1000).toStringAsFixed(1)}k',
-                        style: GoogleFonts.outfit(fontSize: 9, color: const Color(0xFFA855F7), fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 6),
-                      Expanded(
-                        child: Container(
-                          width: 40,
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.03),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: FractionallySizedBox(
-                            heightFactor: progress,
-                            alignment: Alignment.bottomCenter,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    const Color(0xFFA855F7),
-                                    const Color(0xFFA855F7).withOpacity(0.4),
-                                  ],
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFFA855F7).withOpacity(0.2),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 4),
-                                  ),
+              children: weekData.map((day) {
+                final steps = day['steps'] as int;
+                final date = DateTime.parse(day['date']);
+                final double progress = (steps / maxGoal).clamp(0.1, 1.0);
+                
+                return Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Container(
+                        width: 25,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.02),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: FractionallySizedBox(
+                          heightFactor: progress,
+                          alignment: Alignment.bottomCenter,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  const Color(0xFFA855F7),
+                                  const Color(0xFFA855F7).withOpacity(0.4),
                                 ],
                               ),
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFFA855F7).withOpacity(0.2),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        week['week'],
-                        style: GoogleFonts.outfit(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  );
-                }).toList(),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      DateFormat('E').format(date).toUpperCase(),
+                      style: GoogleFonts.outfit(fontSize: 9, color: Colors.white38, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                );
+              }).toList(),
             ),
           ),
         ],
