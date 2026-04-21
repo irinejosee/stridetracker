@@ -2,18 +2,25 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:sensors_plus/sensors_plus.dart';
 
-enum ActivityStatus { stopped, walking, running }
+enum ActivityStatus { stationary, walking, running }
 
 class StepDetector {
-  // Constants for algorithm tuning
-  static const int _minStepIntervalMs = 250; 
-  static const int _maxStepIntervalMs = 1200; 
-  static const int _bufferSize = 40; // Larger for pattern verification
-  static const double _walkingThreshold = 0.8;
-  
-  // Smoothing parameters
-  static const double _alphaMagnitude = 0.15;
-  static const double _alphaGravity = 0.1;
+  // Constant thresholds based on g-force (1g ≈ 9.8 m/s^2)
+  static const double _gravity = 9.80665;
+  static const double _minWalkingG = 1.2;
+  static const double _maxWalkingG = 2.0;
+  static const double _maxRunningG = 4.0;
+  static const double _shakeG = 4.1; // Anything above this is considered shaking
+
+  // Timing constraints
+  static const int _minStepIntervalMs = 250;
+  static const int _maxStepIntervalMs = 2000;
+  static const int _minPeakDurationMs = 150; // Step must stay above threshold for this long
+  static const int _maxShakeDurationMs = 100; // Fast spikes under 100ms are noise/shakes
+
+  // Smoothing
+  static const int _smoothWindowSize = 10;
+  static const double _alphaLPF = 0.15;
 
   // Stream controllers
   final _stepController = StreamController<int>.broadcast();
@@ -22,145 +29,156 @@ class StepDetector {
   Stream<int> get stepStream => _stepController.stream;
   Stream<ActivityStatus> get activityStream => _activityController.stream;
 
-  // State variables
-  final List<double> _magnitudeBuffer = [];
-  final List<int> _timeIntervals = [];
-  final List<ActivityStatus> _recentPotentials = [];
+  // State buffers
+  final List<double> _rawMagnitudeBuffer = [];
+  final List<int> _cadenceBuffer = [];
   
-  double _gx = 0, _gy = 0, _gz = 0;
-  double _smoothedMagnitude = 0;
+  double _gx = 0, _gy = 0, _gz = 0; // Filtered gravity
+  double _lastProcessedMagnitude = 0;
   int _lastStepTime = 0;
-  int _consecutiveSteps = 0;
-  ActivityStatus _currentActivity = ActivityStatus.stopped;
+  int _peakStartTime = 0;
+  int _validPeakCount = 0;
+  bool _isAboveThreshold = false;
   
-  // Pattern confirmation timers
-  DateTime? _patternStartTime;
-  ActivityStatus _potentialStatus = ActivityStatus.stopped;
+  ActivityStatus _currentStatus = ActivityStatus.stationary;
+  ActivityStatus _potentialStatus = ActivityStatus.stationary;
+  DateTime? _statusChangeTime;
 
   void processAccelerometerEvent(AccelerometerEvent event) {
-    // 1. Orientation Check
-    _gx = _alphaGravity * event.x + (1 - _alphaGravity) * _gx;
-    _gy = _alphaGravity * event.y + (1 - _alphaGravity) * _gy;
-    _gz = _alphaGravity * event.z + (1 - _alphaGravity) * _gz;
+    // 1. Orientation Gating (Ignore if Z-axis is dominant/phone is flat)
+    _gx = _alphaLPF * event.x + (1 - _alphaLPF) * _gx;
+    _gy = _alphaLPF * event.y + (1 - _alphaLPF) * _gy;
+    _gz = _alphaLPF * event.z + (1 - _alphaLPF) * _gz;
     
-    double gravityMag = math.sqrt(_gx * _gx + _gy * _gy + _gz * _gz);
-    double zDist = (_gz / gravityMag).abs();
-    
-    if (zDist > 0.9) {
-      _resetActivity();
+    double totalGravity = math.sqrt(_gx * _gx + _gy * _gy + _gz * _gz);
+    if ((_gz / totalGravity).abs() > 0.85) {
+      _resetPattern();
       return;
     }
 
-    // 2. Remove Gravity & Compute Magnitude
+    // 2. Magnitude Calculation (Normalized to G-force)
     double cleanX = event.x - _gx;
     double cleanY = event.y - _gy;
     double cleanZ = event.z - _gz;
-    double rawMagnitude = math.sqrt(cleanX * cleanX + cleanY * cleanY + cleanZ * cleanZ);
+    double magnitude = math.sqrt(cleanX * cleanX + cleanY * cleanY + cleanZ * cleanZ + (_gravity * _gravity)) / _gravity;
 
-    _smoothedMagnitude = _alphaMagnitude * rawMagnitude + (1 - _alphaMagnitude) * _smoothedMagnitude;
+    // 3. Signal Smoothing (Moving Average)
+    _rawMagnitudeBuffer.add(magnitude);
+    if (_rawMagnitudeBuffer.length > _smoothWindowSize) _rawMagnitudeBuffer.removeAt(0);
+    if (_rawMagnitudeBuffer.length < _smoothWindowSize) return;
 
-    // 3. Update Buffer
-    _magnitudeBuffer.add(_smoothedMagnitude);
-    if (_magnitudeBuffer.length > _bufferSize) _magnitudeBuffer.removeAt(0);
-    if (_magnitudeBuffer.length < _bufferSize) return;
+    double smoothedMag = _rawMagnitudeBuffer.reduce((a, b) => a + b) / _smoothWindowSize;
 
-    // 4. Step Detection
-    _detectStep();
-
-    // 5. Status Management (Walking / Running / Stopped)
-    _manageActivityStatus();
+    // 4. Advanced Step & Shake Filtering
+    _analyzeSignal(smoothedMag);
+    
+    // 5. Activity Status Management
+    _updateActivityState();
   }
 
-  void _detectStep() {
-    int i = _magnitudeBuffer.length - 2;
-    double prev = _magnitudeBuffer[i - 1];
-    double curr = _magnitudeBuffer[i];
-    double next = _magnitudeBuffer[i + 1];
+  void _analyzeSignal(double mag) {
+    int now = DateTime.now().millisecondsSinceEpoch;
 
-    if (curr > prev && curr > next && curr > _walkingThreshold) {
-      int currentTime = DateTime.now().millisecondsSinceEpoch;
-      int delta = currentTime - _lastStepTime;
+    // Rule: Anything above 4.0g is an immediate shake - ignore and reset
+    if (mag > _shakeG) {
+      _resetPattern();
+      return;
+    }
 
-      if (delta < _minStepIntervalMs) return;
+    // Check for pattern reset (No steps for 2 seconds)
+    if (_lastStepTime > 0 && (now - _lastStepTime) > _maxStepIntervalMs) {
+      _resetPattern();
+      return;
+    }
 
-      // Spike detection (Shaking filtering)
-      double rise = (curr - prev);
-      double fall = (curr - next);
-      if (rise > 1.8 || fall > 1.8) return; 
+    // Threshold logic (Starts at 1.2g for walking)
+    if (mag > _minWalkingG && !_isAboveThreshold) {
+      _isAboveThreshold = true;
+      _peakStartTime = now;
+    } else if (mag < _minWalkingG && _isAboveThreshold) {
+      _isAboveThreshold = false;
+      int peakDuration = now - _peakStartTime;
 
-      if (_isRhythmic(delta)) {
-        _consecutiveSteps++;
-        if (_consecutiveSteps >= 3) {
-          _stepController.add(1);
-          _timeIntervals.add(delta);
-          if (_timeIntervals.length > 8) _timeIntervals.removeAt(0);
-        }
-        _lastStepTime = currentTime;
-      } else {
-        _consecutiveSteps = 1;
-        _lastStepTime = currentTime;
+      // RULE: Steps must be sustained (>150ms) but not erratic (<100ms is a flicker/shake)
+      if (peakDuration >= _minPeakDurationMs) {
+        _validateStep(now, mag);
       }
     }
   }
 
-  bool _isRhythmic(int newDelta) {
-    if (_timeIntervals.isEmpty) return true;
-    double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
-    double variance = (newDelta - avgDelta).abs() / avgDelta;
-    return variance < 0.30; // Stricter rhythm requirement (30%)
-  }
+  void _validateStep(int now, double mag) {
+    if (_lastStepTime == 0) {
+      _lastStepTime = now;
+      _validPeakCount = 1;
+      return;
+    }
 
-  void _manageActivityStatus() {
-    int currentTime = DateTime.now().millisecondsSinceEpoch;
-    int deltaSinceLastStep = currentTime - _lastStepTime;
+    int delta = now - _lastStepTime;
 
-    ActivityStatus potentialNow;
-    if (deltaSinceLastStep > _maxStepIntervalMs) {
-      potentialNow = ActivityStatus.stopped;
-    } else if (_timeIntervals.isEmpty) {
-      potentialNow = ActivityStatus.stopped;
+    // RULE: 250ms - 2000ms valid window
+    if (delta >= _minStepIntervalMs && delta <= _maxStepIntervalMs) {
+      _validPeakCount++;
+      _lastStepTime = now;
+      _cadenceBuffer.add(delta);
+      if (_cadenceBuffer.length > 5) _cadenceBuffer.removeAt(0);
+
+      // RULE: Only count after 3 consecutive valid peaks
+      if (_validPeakCount >= 3) {
+        _stepController.add(1);
+      }
     } else {
-      double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
-      double stepsPerSecond = 1000 / avgDelta;
+      _validPeakCount = 1; // Unrealistic timing, restart count
+      _lastStepTime = now;
+    }
+  }
 
-      if (stepsPerSecond >= 2.0 && stepsPerSecond <= 3.5) {
-        potentialNow = ActivityStatus.running;
-      } else if (stepsPerSecond >= 0.8 && stepsPerSecond < 2.0) {
-        potentialNow = ActivityStatus.walking;
+  void _updateActivityState() {
+    int now = DateTime.now().millisecondsSinceEpoch;
+    ActivityStatus currentSample;
+
+    if (_lastStepTime == 0 || (now - _lastStepTime) > _maxStepIntervalMs) {
+      currentSample = ActivityStatus.stationary;
+    } else if (_cadenceBuffer.isEmpty) {
+      currentSample = ActivityStatus.stationary;
+    } else {
+      double avgDelta = _cadenceBuffer.reduce((a, b) => a + b) / _cadenceBuffer.length;
+      double stepsPerSec = 1000 / avgDelta;
+      
+      // We use the most recent smoothed magnitude as a hint for intensity
+      double intensity = _rawMagnitudeBuffer.last;
+
+      if (stepsPerSec >= 2.0 && stepsPerSec <= 3.1 && intensity > 2.0) {
+        currentSample = ActivityStatus.running;
+      } else if (stepsPerSec >= 0.8 && stepsPerSec < 2.0) {
+        currentSample = ActivityStatus.walking;
       } else {
-        potentialNow = ActivityStatus.stopped;
+        currentSample = ActivityStatus.stationary;
       }
     }
 
-    // Confirmation Logic
-    if (potentialNow != _potentialStatus) {
-      _potentialStatus = potentialNow;
-      _patternStartTime = DateTime.now();
-    } else if (_patternStartTime != null) {
-      int confirmedDurationSeconds = DateTime.now().difference(_patternStartTime!).inSeconds;
-      
-      // RULE: Running requires 4 seconds confirmation
-      // RULE: Others require 3 seconds confirmation
-      int requiredSeconds = (potentialNow == ActivityStatus.running) ? 4 : 3;
-
-      if (confirmedDurationSeconds >= requiredSeconds) {
-        if (_currentActivity != potentialNow) {
-          _currentActivity = potentialNow;
-          _activityController.add(_currentActivity);
+    // RULE: Confirm status for 4 consecutive seconds
+    if (currentSample != _potentialStatus) {
+      _potentialStatus = currentSample;
+      _statusChangeTime = DateTime.now();
+    } else if (_statusChangeTime != null) {
+      if (DateTime.now().difference(_statusChangeTime!).inSeconds >= 4) {
+        if (_currentStatus != _potentialStatus) {
+          _currentStatus = _potentialStatus;
+          _activityController.add(_currentStatus);
         }
       }
     }
   }
 
-  void _resetActivity() {
-    if (_currentActivity != ActivityStatus.stopped) {
-      _currentActivity = ActivityStatus.stopped;
-      _activityController.add(_currentActivity);
+  void _resetPattern() {
+    _validPeakCount = 0;
+    _cadenceBuffer.clear();
+    _lastStepTime = 0;
+    if (_currentStatus != ActivityStatus.stationary) {
+      _currentStatus = ActivityStatus.stationary;
+      _activityController.add(_currentStatus);
     }
-    _potentialStatus = ActivityStatus.stopped;
-    _patternStartTime = null;
-    _consecutiveSteps = 0;
-    _timeIntervals.clear();
+    _statusChangeTime = null;
   }
 
   void dispose() {
