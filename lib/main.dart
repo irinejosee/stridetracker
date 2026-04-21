@@ -49,7 +49,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   int _todaySteps = 0;
   int _stepGoal = 10000;
-  String _status = 'Stationary';
+  String _status = 'Stopped';
   late StepDetector _stepDetector;
   StreamSubscription? _accelerometerSubscription;
   StreamSubscription? _stepSubscription;
@@ -104,8 +104,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           case ActivityStatus.running:
             _status = 'Running';
             break;
-          case ActivityStatus.stationary:
-            _status = 'Stationary';
+          case ActivityStatus.stopped:
+            _status = 'Stopped';
             break;
         }
       });
@@ -1257,7 +1257,7 @@ class _NeonStatusPill extends StatelessWidget {
         icon = Icons.directions_run_rounded;
         color = const Color(0xFFE11D48); // Rose
         break;
-      case 'stationary':
+      case 'stopped':
       default:
         icon = Icons.accessibility_new_rounded;
         color = const Color(0xFFA855F7); // Purple
