@@ -95,7 +95,104 @@ Contributions are welcome! Feel free to open an issue or submit a pull request.
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
+4. Push to the Branch (`git push origin feature/AmazingFe# StrideTrack
+
+A Flutter pedometer app built to track your daily steps accurately with a clean dark UI. Built for Android using hardware-level sensors.
+
+![License](https://img.shields.io/badge/license-MIT-blueviolet)
+![Flutter](https://img.shields.io/badge/flutter-%2302569B.svg?style=flat&logo=flutter&logoColor=white)
+![Dart](https://img.shields.io/badge/dart-%230175C2.svg?style=flat&logo=dart&logoColor=white)
+
+---
+
+## Features
+
+- **Real-time Tracking** — connects directly to the Android Sensor Hub for accurate step counting.
+- **Incremental Delta Logic** — handles phone reboots and sensor resets without losing your step count.
+- **Dark UI** — neon purple and black theme with glassmorphism and mesh gradients.
+- **Activity Log** — history view showing the last 30 days with progress bars.
+- **Pull to Refresh** — manually trigger sensor re-synchronization.
+- **Responsive Layout** — works in both portrait and landscape orientations.
+- **Battery Efficient** — uses the hardware `TYPE_STEP_COUNTER` to minimize battery drain.
+
+---
+
+## Tech Stack
+
+- **Framework**: Flutter
+- **Language**: Dart
+- **State Management**: StatefulWidget
+- **Persistence**: shared_preferences
+- **Sensors**: pedometer package
+- **Fonts & Animations**: google_fonts (Outfit) & animations package
+
+---
+
+## How Step Detection Works
+
+StrideTrack uses a custom accelerometer-based pipeline to detect steps accurately:
+
+1. **Gravity removal** — low-pass filter to isolate linear acceleration
+2. **Noise filtering** — moving average buffer to smooth out jitter
+3. **Peak detection** — identifies steps using a sliding 3-point window
+4. **Adaptive thresholding** — adjusts sensitivity based on recent signal energy
+5. **Gating logic** — enforces realistic step intervals between 250ms and 2000ms
+6. **Walking verification** — only starts counting after 5 consecutive strides to avoid false positives
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Flutter SDK (latest stable)
+- Android Studio or VS Code
+- A physical Android device (emulators don't support step sensors)
+
+### Installation
+
+1. Clone the repository
+```bash
+   git clone https://github.com/irinejosee/stridetracker.git
+```
+
+2. Install dependencies
+```bash
+   flutter pub get
+```
+
+3. Run the app
+```bash
+   flutter run
+```
+
+Permissions for `ACTIVITY_RECOGNITION` are handled automatically at runtime.
+
+---
+
+## UI
+
+- **Home screen** — neon progress circle with calories and distance stats
+- **History screen** — scrollable list of past days with progress indicators
+- **Landscape mode** — adaptive dashboard layout
+
+---
+
+## License
+
+MIT License — see `LICENSE` for details.
+
+---
+
+## Contributing
+
+Contributions are welcome! To contribute:
+
+1. Fork the project
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m 'Add your feature'`)
+4. Push to the branch (`git push origin feature/your-feature`)
+5. Open a pull requestature`)
 5. Open a Pull Request
 
 ---
