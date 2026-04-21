@@ -624,6 +624,13 @@ class _NeonStatCard extends StatelessWidget {
   }
 }
 
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
 class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _history = [];
 
@@ -806,10 +813,15 @@ class _ToolsScreenState extends State<ToolsScreen> {
       final bmi = weight / ((height / 100) * (height / 100));
       setState(() {
         _bmi = bmi;
-        if (bmi < 18.5) _bmiCategory = 'Underweight';
-        else if (bmi < 25) _bmiCategory = 'Healthy';
-        else if (bmi < 30) _bmiCategory = 'Overweight';
-        else _bmiCategory = 'Obese';
+        if (bmi < 18.5) {
+          _bmiCategory = 'Underweight';
+        } else if (bmi < 25) {
+          _bmiCategory = 'Healthy';
+        } else if (bmi < 30) {
+          _bmiCategory = 'Overweight';
+        } else {
+          _bmiCategory = 'Obese';
+        }
       });
 
       final prefs = await SharedPreferences.getInstance();

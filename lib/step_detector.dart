@@ -10,8 +10,6 @@ class StepDetector {
   static const int _maxStepIntervalMs = 1200; // Slower than 0.8 steps/sec is stationary
   static const int _bufferSize = 30; // Larger buffer for better pattern recognition
   static const double _walkingThreshold = 0.8;
-  static const double _runningThreshold = 2.5;
-  static const double _minRhythmicCertainty = 0.7; // 70% consistency required
   
   // Smoothing parameters
   static const double _alphaMagnitude = 0.15; // Low-pass filter for magnitude smoothing
@@ -29,7 +27,6 @@ class StepDetector {
   final List<int> _timeIntervals = [];
   
   double _gx = 0, _gy = 0, _gz = 0; // Gravity components
-  double _lastMagnitude = 0;
   double _smoothedMagnitude = 0;
   int _lastStepTime = 0;
   int _consecutiveSteps = 0;
