@@ -48,6 +48,7 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   int _todaySteps = 0;
+  int _stepGoal = 10000;
   String _status = 'Stationary';
   late StepDetector _stepDetector;
   StreamSubscription? _accelerometerSubscription;
@@ -61,13 +62,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _stepDetector = StepDetector();
     _initTracker();
     _checkMidnightReset();
-    _loadInitialSteps();
+    _loadInitialData();
   }
 
-  Future<void> _loadInitialSteps() async {
+  Future<void> _loadInitialData() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _todaySteps = prefs.getInt('today_steps_live') ?? 0;
+      _stepGoal = prefs.getInt('step_goal') ?? 10000;
     });
   }
 
@@ -155,6 +157,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final screens = [
       HomeScreen(
         steps: _todaySteps,
+        goal: _stepGoal,
         status: _status,
         onRefresh: () async {
           await _initTracker();
@@ -162,10 +165,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           final prefs = await SharedPreferences.getInstance();
           setState(() {
             _todaySteps = prefs.getInt('today_steps_live') ?? _todaySteps;
+            _stepGoal = prefs.getInt('step_goal') ?? _stepGoal;
           });
         },
       ),
       const HistoryScreen(),
+      ToolsScreen(
+        currentGoal: _stepGoal,
+        onGoalChanged: (newGoal) async {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setInt('step_goal', newGoal);
+          setState(() => _stepGoal = newGoal);
+        },
+      ),
     ];
 
     return Scaffold(
@@ -191,13 +203,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 class HomeScreen extends StatelessWidget {
   final int steps;
   final String status;
+  final int goal;
   final Future<void> Function() onRefresh;
-  final int goal = 10000;
 
   const HomeScreen({
     super.key,
     required this.steps,
     required this.status,
+    required this.goal,
     required this.onRefresh,
   });
 
@@ -611,13 +624,6 @@ class _NeonStatCard extends StatelessWidget {
   }
 }
 
-class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key});
-
-  @override
-  State<HistoryScreen> createState() => _HistoryScreenState();
-}
-
 class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _history = [];
 
@@ -644,9 +650,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
               child: Text(
-                'Data History',
+                'Activity Records',
                 style: GoogleFonts.outfit(
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
@@ -654,6 +660,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
               ),
             ),
+            if (_history.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16),
+                child: _NeonBarChart(history: _history.reversed.take(7).toList().reversed.toList()),
+              ),
             Expanded(
               child: _history.isEmpty
                   ? Center(
@@ -667,7 +678,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                       itemCount: _history.length,
                       itemBuilder: (context, index) {
                         final item = _history[index];
@@ -678,6 +689,288 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _NeonBarChart extends StatelessWidget {
+  final List<Map<String, dynamic>> history;
+  static const int maxGoal = 10000;
+
+  const _NeonBarChart({required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 180,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: history.map((day) {
+          final steps = day['steps'] as int;
+          final date = DateTime.parse(day['date']);
+          final double progress = (steps / maxGoal).clamp(0.1, 1.0);
+          
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Container(
+                  width: 30,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        const Color(0xFFA855F7),
+                        const Color(0xFFA855F7).withOpacity(0.2),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(15),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFA855F7).withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: FractionallySizedBox(
+                    heightFactor: progress,
+                    alignment: Alignment.bottomCenter,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFA855F7).withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                DateFormat('E').format(date).toUpperCase(),
+                style: GoogleFonts.outfit(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class ToolsScreen extends StatefulWidget {
+  final int currentGoal;
+  final Function(int) onGoalChanged;
+
+  const ToolsScreen({super.key, required this.currentGoal, required this.onGoalChanged});
+
+  @override
+  State<ToolsScreen> createState() => _ToolsScreenState();
+}
+
+class _ToolsScreenState extends State<ToolsScreen> {
+  final _weightController = TextEditingController();
+  final _heightController = TextEditingController();
+  double? _bmi;
+  String _bmiCategory = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBMIData();
+  }
+
+  Future<void> _loadBMIData() async {
+    final prefs = await SharedPreferences.getInstance();
+    _weightController.text = prefs.getString('user_weight') ?? '';
+    _heightController.text = prefs.getString('user_height') ?? '';
+    if (_weightController.text.isNotEmpty && _heightController.text.isNotEmpty) {
+      _calculateBMI();
+    }
+  }
+
+  void _calculateBMI() async {
+    final weight = double.tryParse(_weightController.text);
+    final height = double.tryParse(_heightController.text);
+
+    if (weight != null && height != null && height > 0) {
+      final bmi = weight / ((height / 100) * (height / 100));
+      setState(() {
+        _bmi = bmi;
+        if (bmi < 18.5) _bmiCategory = 'Underweight';
+        else if (bmi < 25) _bmiCategory = 'Healthy';
+        else if (bmi < 30) _bmiCategory = 'Overweight';
+        else _bmiCategory = 'Obese';
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_weight', _weightController.text);
+      await prefs.setString('user_height', _heightController.text);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Personalize',
+                style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.w800, color: Colors.white),
+              ),
+              const SizedBox(height: 32),
+              _ToolsCard(
+                title: 'Daily Step Goal',
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('${widget.currentGoal} steps', style: GoogleFonts.outfit(fontSize: 20, fontWeight: FontWeight.bold)),
+                        const Icon(Icons.flag_rounded, color: Color(0xFFA855F7)),
+                      ],
+                    ),
+                    Slider(
+                      value: widget.currentGoal.toDouble(),
+                      min: 2000,
+                      max: 20000,
+                      divisions: 18,
+                      activeColor: const Color(0xFFA855F7),
+                      onChanged: (val) => widget.onGoalChanged(val.toInt()),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              _ToolsCard(
+                title: 'BMI Calculator',
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _BMIInput(
+                            controller: _heightController,
+                            label: 'Height (cm)',
+                            onChanged: (_) => _calculateBMI(),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _BMIInput(
+                            controller: _weightController,
+                            label: 'Weight (kg)',
+                            onChanged: (_) => _calculateBMI(),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_bmi != null) ...[
+                      const SizedBox(height: 24),
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFA855F7).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Your BMI', style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12)),
+                                Text(_bmi!.toStringAsFixed(1), style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFA855F7),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                _bmiCategory.toUpperCase(),
+                                style: GoogleFonts.outfit(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ToolsCard extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const _ToolsCard({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: GoogleFonts.outfit(fontSize: 14, color: Colors.white38, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _BMIInput extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final Function(String) onChanged;
+
+  const _BMIInput({required this.controller, required this.label, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: TextInputType.number,
+      onChanged: onChanged,
+      style: GoogleFonts.outfit(fontSize: 18, color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: GoogleFonts.outfit(color: Colors.white24, fontSize: 14),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white.withOpacity(0.1))),
+        focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
       ),
     );
   }
@@ -802,6 +1095,12 @@ class CustomNeonNavBar extends StatelessWidget {
             label: 'RECORDS',
             isActive: currentIndex == 1,
             onTap: () => onTap(1),
+          ),
+          _NeonNavBarItem(
+            icon: Icons.settings_suggest_rounded,
+            label: 'TOOLS',
+            isActive: currentIndex == 2,
+            onTap: () => onTap(2),
           ),
         ],
       ),
