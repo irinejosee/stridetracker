@@ -48,10 +48,11 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   int _todaySteps = 0;
-  String _status = 'Stopped';
+  String _status = 'Stationary';
   late StepDetector _stepDetector;
   StreamSubscription? _accelerometerSubscription;
   StreamSubscription? _stepSubscription;
+  StreamSubscription? _activitySubscription;
   Timer? _stopTimer;
 
   @override
@@ -83,15 +84,29 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _stepSubscription?.cancel();
 
     // Listen to raw accelerometer data
-    _accelerometerSubscription = accelerometerEventStream().listen(
-      (AccelerometerEvent event) {
-        _stepDetector.processAccelerometerEvent(event);
-      },
-    );
+    _accelerometerSubscription = accelerometerEventStream().listen((event) {
+      _stepDetector.processAccelerometerEvent(event);
+    });
 
     // Listen to processed step events
-    _stepSubscription = _stepDetector.stepStream.listen((_) {
-      _onStepDetected();
+    _stepSubscription = _stepDetector.stepStream.listen((_) => _onStepDetected());
+
+    // Listen to activity status changes
+    _activitySubscription = _stepDetector.activityStream.listen((status) {
+      if (!mounted) return;
+      setState(() {
+        switch (status) {
+          case ActivityStatus.walking:
+            _status = 'Walking';
+            break;
+          case ActivityStatus.running:
+            _status = 'Running';
+            break;
+          case ActivityStatus.stationary:
+            _status = 'Stationary';
+            break;
+        }
+      });
     });
   }
 
@@ -99,24 +114,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final prefs = await SharedPreferences.getInstance();
     await _checkMidnightReset();
 
-    setState(() {
-      _todaySteps++;
-      _status = 'Walking';
-    });
+    if (mounted) {
+      setState(() {
+        _todaySteps++;
+      });
+    }
 
     await prefs.setInt('today_steps_live', _todaySteps);
-
-    // Reset status to "Stopped" after 2 seconds of inactivity
-    _stopTimer?.cancel();
-    _stopTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _status = 'Stopped');
-    });
   }
 
   @override
   void dispose() {
     _accelerometerSubscription?.cancel();
     _stepSubscription?.cancel();
+    _activitySubscription?.cancel();
     _stepDetector.dispose();
     _stopTimer?.cancel();
     super.dispose();
@@ -851,23 +862,53 @@ class _NeonStatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    bool isWalking = status == 'Walking';
-    final color = isWalking ? const Color(0xFF10B981) : const Color(0xFFA855F7);
+    IconData icon;
+    Color color;
+
+    switch (status.toLowerCase()) {
+      case 'walking':
+        icon = Icons.directions_walk_rounded;
+        color = const Color(0xFF10B981); // Emerald
+        break;
+      case 'running':
+        icon = Icons.directions_run_rounded;
+        color = const Color(0xFFE11D48); // Rose
+        break;
+      case 'stationary':
+      default:
+        icon = Icons.accessibility_new_rounded;
+        color = const Color(0xFFA855F7); // Purple
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.4), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.1),
+            blurRadius: 10,
+            spreadRadius: 2,
+          ),
+        ],
       ),
-      child: Text(
-        status.toUpperCase(),
-        style: GoogleFonts.outfit(
-          fontSize: 11,
-          fontWeight: FontWeight.w900,
-          color: color,
-          letterSpacing: 1.5,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Text(
+            status.toUpperCase(),
+            style: GoogleFonts.outfit(
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              color: color,
+              letterSpacing: 1.5,
+            ),
+          ),
+        ],
       ),
     );
   }

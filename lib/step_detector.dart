@@ -2,134 +2,175 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:sensors_plus/sensors_plus.dart';
 
+enum ActivityStatus { stationary, walking, running }
+
 class StepDetector {
   // Constants for algorithm tuning
-  static const double _gravity = 9.80665;
-  static const int _minStepIntervalMs = 250;
-  static const int _maxStepIntervalMs = 2000;
-  static const int _bufferSize = 20; // Size for moving average and thresholding
-  static const int _requiredWalkingSteps = 6; // Increased from 5 to 6 for better pattern confirmation
-  static const double _minPeakAmplitude = 1.2; // Minimum amplitude (m/s^2) for a valid step peak
-  static const double _maxValidVariance = 15.0; // Too much variance might be intense shaking
-  static const double _minValidVariance = 0.05; // Too little variance is just idling/fidgeting
+  static const int _minStepIntervalMs = 250; // Faster than 4 steps/sec is unlikely for running
+  static const int _maxStepIntervalMs = 1200; // Slower than 0.8 steps/sec is stationary
+  static const int _bufferSize = 30; // Larger buffer for better pattern recognition
+  static const double _walkingThreshold = 0.8;
+  static const double _runningThreshold = 2.5;
+  static const double _minRhythmicCertainty = 0.7; // 70% consistency required
+  
+  // Smoothing parameters
+  static const double _alphaMagnitude = 0.15; // Low-pass filter for magnitude smoothing
+  static const double _alphaGravity = 0.1; // Low-pass filter for gravity estimation
 
-  // Stream controller for step events
+  // Stream controllers
   final _stepController = StreamController<int>.broadcast();
+  final _activityController = StreamController<ActivityStatus>.broadcast();
+  
   Stream<int> get stepStream => _stepController.stream;
+  Stream<ActivityStatus> get activityStream => _activityController.stream;
 
   // State variables
   final List<double> _magnitudeBuffer = [];
-  double _dynamicThreshold = 1.2; // Initial threshold above gravity
+  final List<int> _timeIntervals = [];
+  
+  double _gx = 0, _gy = 0, _gz = 0; // Gravity components
+  double _lastMagnitude = 0;
+  double _smoothedMagnitude = 0;
   int _lastStepTime = 0;
   int _consecutiveSteps = 0;
-  bool _isWalking = false;
-  
-  // Low-pass filter variables for gravity estimation
-  double _gx = 0, _gy = 0, _gz = 0;
-  static const double _alpha = 0.8; // Filter coefficient
+  ActivityStatus _currentActivity = ActivityStatus.stationary;
 
   void processAccelerometerEvent(AccelerometerEvent event) {
-    // 1. Remove gravity using a simple low-pass filter (High-pass effect on output)
-    _gx = _alpha * _gx + (1 - _alpha) * event.x;
-    _gy = _alpha * _gy + (1 - _alpha) * event.y;
-    _gz = _alpha * _gz + (1 - _alpha) * event.z;
+    // 1. Orientation Check: Ignore if phone is lying flat
+    // If gravity is mostly on the Z axis (horizontal position), it's likely flat
+    _gx = _alphaGravity * event.x + (1 - _alphaGravity) * _gx;
+    _gy = _alphaGravity * event.y + (1 - _alphaGravity) * _gy;
+    _gz = _alphaGravity * event.z + (1 - _alphaGravity) * _gz;
+    
+    double gravityMag = math.sqrt(_gx * _gx + _gy * _gy + _gz * _gz);
+    double zDist = (_gz / gravityMag).abs();
+    
+    // If Z component is more than 90% of total gravity, phone is roughly flat
+    if (zDist > 0.9) {
+      _resetActivity();
+      return;
+    }
 
+    // 2. Remove Gravity & Compute Magnitude
     double cleanX = event.x - _gx;
     double cleanY = event.y - _gy;
     double cleanZ = event.z - _gz;
+    double rawMagnitude = math.sqrt(cleanX * cleanX + cleanY * cleanY + cleanZ * cleanZ);
 
-    // 2. Compute magnitude
-    double magnitude = math.sqrt(cleanX * cleanX + cleanY * cleanY + cleanZ * cleanZ);
+    // 3. Low-Pass Filter on Magnitude to smooth jerky movements/shaking
+    _smoothedMagnitude = _alphaMagnitude * rawMagnitude + (1 - _alphaMagnitude) * _smoothedMagnitude;
 
-    // 3. Smooth the signal using Moving Average
-    _magnitudeBuffer.add(magnitude);
+    // 4. Update Buffer
+    _magnitudeBuffer.add(_smoothedMagnitude);
     if (_magnitudeBuffer.length > _bufferSize) {
       _magnitudeBuffer.removeAt(0);
     }
 
     if (_magnitudeBuffer.length < _bufferSize) return;
 
-    // 4. Peak Detection & Adaptive Thresholding
-    _updateThreshold();
+    // 5. Peak Detection & Footfall Validation
+    _detectStep();
 
-    // Check for peak using a 3-point local window (i-1, i, i+1)
-    int i = _magnitudeBuffer.length - 2;
+    // 6. Update Activity Status based on frequency and intensity
+    _updateActivityStatus();
+  }
+
+  void _detectStep() {
+    int i = _magnitudeBuffer.length - 2; // Check the middle point of a 3-point window
     double prev = _magnitudeBuffer[i - 1];
     double curr = _magnitudeBuffer[i];
     double next = _magnitudeBuffer[i + 1];
 
-    if (curr > _dynamicThreshold && curr > prev && curr > next) {
-      // 5. Additional Validation for Fake Motion
-      if (_isValidStepSignal(curr)) {
-        _handlePotentialStep();
+    // Peak criteria: higher than neighbors and exceeds threshold
+    if (curr > prev && curr > next && curr > _walkingThreshold) {
+      int currentTime = DateTime.now().millisecondsSinceEpoch;
+      int delta = currentTime - _lastStepTime;
+
+      // Rule: Ignore movements shorter than 250ms (debouncing)
+      if (delta < _minStepIntervalMs) return;
+
+      // Rule: Only count if pattern matches natural footfall (rise then fall)
+      // Check if the rise (curr - prev) and fall (curr - next) are gradual, not spikes
+      // A sharp spike often indicates a jolt/shake
+      double rise = (curr - prev);
+      double fall = (curr - next);
+      
+      // If rise/fall is too extreme relative to the peak, it's a "spike"
+      if (rise > 2.0 || fall > 2.0) return; 
+
+      // Rule: Consistent rhythmic motion
+      if (_isRhythmic(delta)) {
+        _consecutiveSteps++;
+        
+        // Require at least 3 consistent steps before counting
+        if (_consecutiveSteps >= 3) {
+          _stepController.add(1);
+          
+          // Update time intervals for cadence detection
+          _timeIntervals.add(delta);
+          if (_timeIntervals.length > 5) _timeIntervals.removeAt(0);
+        }
+        
+        _lastStepTime = currentTime;
+      } else {
+        // Not rhythmic enough yet
+        _consecutiveSteps = 1;
+        _lastStepTime = currentTime;
       }
     }
   }
 
-  bool _isValidStepSignal(double peakValue) {
-    // Check 1: Minimum Peak Amplitude (Filters out subtle fidgeting)
-    double minInBuf = _magnitudeBuffer.reduce(math.min);
-    double amplitude = peakValue - minInBuf;
-    if (amplitude < _minPeakAmplitude) return false;
-
-    // Check 2: Signal Variance (Filters out constant engine vibration or random noise)
-    double mean = _magnitudeBuffer.reduce((a, b) => a + b) / _bufferSize;
-    double variance = _magnitudeBuffer.map((x) => math.pow(x - mean, 2)).reduce((a, b) => a + b) / _bufferSize;
-
-    if (variance < _minValidVariance || variance > _maxValidVariance) {
-      return false; // Signal is either too flat (idle) or too chaotic (random shaking)
-    }
-
-    return true;
-  }
-
-  void _updateThreshold() {
-    double maxInBuf = _magnitudeBuffer.reduce(math.max);
-    double minInBuf = _magnitudeBuffer.reduce(math.min);
-    double range = maxInBuf - minInBuf;
+  bool _isRhythmic(int newDelta) {
+    if (_timeIntervals.isEmpty) return true;
     
-    // Adaptive threshold: a bit above the mean, but at least a minimum sensitivity
-    double calculatedThreshold = minInBuf + (range * 0.6);
-    _dynamicThreshold = math.max(0.8, calculatedThreshold); 
+    // Compare new delta with average of recent deltas
+    double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
+    double variance = (newDelta - avgDelta).abs() / avgDelta;
+    
+    // If variance is less than 30%, it's rhythmic
+    return variance < 0.35;
   }
 
-  void _handlePotentialStep() {
+  void _updateActivityStatus() {
     int currentTime = DateTime.now().millisecondsSinceEpoch;
-    
-    if (_lastStepTime == 0) {
-      _lastStepTime = currentTime;
-      _consecutiveSteps = 1;
+    int deltaSinceLastStep = currentTime - _lastStepTime;
+
+    if (deltaSinceLastStep > _maxStepIntervalMs) {
+      _resetActivity();
       return;
     }
 
-    int delta = currentTime - _lastStepTime;
+    if (_timeIntervals.isEmpty) return;
 
-    // 5. Enforce realistic time intervals (250ms - 2000ms)
-    if (delta > _minStepIntervalMs && delta < _maxStepIntervalMs) {
-      _consecutiveSteps++;
-      
-      // 6. Detect continuous walking patterns before counting steps
-      if (!_isWalking) {
-        if (_consecutiveSteps >= _requiredWalkingSteps) {
-          _isWalking = true;
-          // When walking starts, we "catch up" the steps
-          for (int i = 0; i < _requiredWalkingSteps; i++) {
-            _stepController.add(1);
-          }
-        }
-      } else {
-        _stepController.add(1);
-      }
-      _lastStepTime = currentTime;
-    } else if (delta >= _maxStepIntervalMs) {
-      // Too long since last step, reset walking detection
-      _consecutiveSteps = 1;
-      _isWalking = false;
-      _lastStepTime = currentTime;
+    double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
+    double stepsPerSecond = 1000 / avgDelta;
+
+    ActivityStatus newStatus;
+    if (stepsPerSecond >= 2.0) { // 2-3 steps per second
+      newStatus = ActivityStatus.running;
+    } else if (stepsPerSecond >= 0.8) { // 1-2 steps per second
+      newStatus = ActivityStatus.walking;
+    } else {
+      newStatus = ActivityStatus.stationary;
     }
+
+    if (newStatus != _currentActivity) {
+      _currentActivity = newStatus;
+      _activityController.add(_currentActivity);
+    }
+  }
+
+  void _resetActivity() {
+    if (_currentActivity != ActivityStatus.stationary) {
+      _currentActivity = ActivityStatus.stationary;
+      _activityController.add(_currentActivity);
+    }
+    _consecutiveSteps = 0;
+    _timeIntervals.clear();
   }
 
   void dispose() {
     _stepController.close();
+    _activityController.close();
   }
 }
