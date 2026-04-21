@@ -2,18 +2,18 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:sensors_plus/sensors_plus.dart';
 
-enum ActivityStatus { stationary, walking, running }
+enum ActivityStatus { stopped, walking, running }
 
 class StepDetector {
   // Constants for algorithm tuning
-  static const int _minStepIntervalMs = 250; // Faster than 4 steps/sec is unlikely for running
-  static const int _maxStepIntervalMs = 1200; // Slower than 0.8 steps/sec is stationary
-  static const int _bufferSize = 30; // Larger buffer for better pattern recognition
+  static const int _minStepIntervalMs = 250; 
+  static const int _maxStepIntervalMs = 1200; 
+  static const int _bufferSize = 40; // Larger for pattern verification
   static const double _walkingThreshold = 0.8;
   
   // Smoothing parameters
-  static const double _alphaMagnitude = 0.15; // Low-pass filter for magnitude smoothing
-  static const double _alphaGravity = 0.1; // Low-pass filter for gravity estimation
+  static const double _alphaMagnitude = 0.15;
+  static const double _alphaGravity = 0.1;
 
   // Stream controllers
   final _stepController = StreamController<int>.broadcast();
@@ -25,16 +25,20 @@ class StepDetector {
   // State variables
   final List<double> _magnitudeBuffer = [];
   final List<int> _timeIntervals = [];
+  final List<ActivityStatus> _recentPotentials = [];
   
-  double _gx = 0, _gy = 0, _gz = 0; // Gravity components
+  double _gx = 0, _gy = 0, _gz = 0;
   double _smoothedMagnitude = 0;
   int _lastStepTime = 0;
   int _consecutiveSteps = 0;
-  ActivityStatus _currentActivity = ActivityStatus.stationary;
+  ActivityStatus _currentActivity = ActivityStatus.stopped;
+  
+  // Pattern confirmation timers
+  DateTime? _patternStartTime;
+  ActivityStatus _potentialStatus = ActivityStatus.stopped;
 
   void processAccelerometerEvent(AccelerometerEvent event) {
-    // 1. Orientation Check: Ignore if phone is lying flat
-    // If gravity is mostly on the Z axis (horizontal position), it's likely flat
+    // 1. Orientation Check
     _gx = _alphaGravity * event.x + (1 - _alphaGravity) * _gx;
     _gy = _alphaGravity * event.y + (1 - _alphaGravity) * _gy;
     _gz = _alphaGravity * event.z + (1 - _alphaGravity) * _gz;
@@ -42,7 +46,6 @@ class StepDetector {
     double gravityMag = math.sqrt(_gx * _gx + _gy * _gy + _gz * _gz);
     double zDist = (_gz / gravityMag).abs();
     
-    // If Z component is more than 90% of total gravity, phone is roughly flat
     if (zDist > 0.9) {
       _resetActivity();
       return;
@@ -54,63 +57,46 @@ class StepDetector {
     double cleanZ = event.z - _gz;
     double rawMagnitude = math.sqrt(cleanX * cleanX + cleanY * cleanY + cleanZ * cleanZ);
 
-    // 3. Low-Pass Filter on Magnitude to smooth jerky movements/shaking
     _smoothedMagnitude = _alphaMagnitude * rawMagnitude + (1 - _alphaMagnitude) * _smoothedMagnitude;
 
-    // 4. Update Buffer
+    // 3. Update Buffer
     _magnitudeBuffer.add(_smoothedMagnitude);
-    if (_magnitudeBuffer.length > _bufferSize) {
-      _magnitudeBuffer.removeAt(0);
-    }
-
+    if (_magnitudeBuffer.length > _bufferSize) _magnitudeBuffer.removeAt(0);
     if (_magnitudeBuffer.length < _bufferSize) return;
 
-    // 5. Peak Detection & Footfall Validation
+    // 4. Step Detection
     _detectStep();
 
-    // 6. Update Activity Status based on frequency and intensity
-    _updateActivityStatus();
+    // 5. Status Management (Walking / Running / Stopped)
+    _manageActivityStatus();
   }
 
   void _detectStep() {
-    int i = _magnitudeBuffer.length - 2; // Check the middle point of a 3-point window
+    int i = _magnitudeBuffer.length - 2;
     double prev = _magnitudeBuffer[i - 1];
     double curr = _magnitudeBuffer[i];
     double next = _magnitudeBuffer[i + 1];
 
-    // Peak criteria: higher than neighbors and exceeds threshold
     if (curr > prev && curr > next && curr > _walkingThreshold) {
       int currentTime = DateTime.now().millisecondsSinceEpoch;
       int delta = currentTime - _lastStepTime;
 
-      // Rule: Ignore movements shorter than 250ms (debouncing)
       if (delta < _minStepIntervalMs) return;
 
-      // Rule: Only count if pattern matches natural footfall (rise then fall)
-      // Check if the rise (curr - prev) and fall (curr - next) are gradual, not spikes
-      // A sharp spike often indicates a jolt/shake
+      // Spike detection (Shaking filtering)
       double rise = (curr - prev);
       double fall = (curr - next);
-      
-      // If rise/fall is too extreme relative to the peak, it's a "spike"
-      if (rise > 2.0 || fall > 2.0) return; 
+      if (rise > 1.8 || fall > 1.8) return; 
 
-      // Rule: Consistent rhythmic motion
       if (_isRhythmic(delta)) {
         _consecutiveSteps++;
-        
-        // Require at least 3 consistent steps before counting
         if (_consecutiveSteps >= 3) {
           _stepController.add(1);
-          
-          // Update time intervals for cadence detection
           _timeIntervals.add(delta);
-          if (_timeIntervals.length > 5) _timeIntervals.removeAt(0);
+          if (_timeIntervals.length > 8) _timeIntervals.removeAt(0);
         }
-        
         _lastStepTime = currentTime;
       } else {
-        // Not rhythmic enough yet
         _consecutiveSteps = 1;
         _lastStepTime = currentTime;
       }
@@ -119,49 +105,60 @@ class StepDetector {
 
   bool _isRhythmic(int newDelta) {
     if (_timeIntervals.isEmpty) return true;
-    
-    // Compare new delta with average of recent deltas
     double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
     double variance = (newDelta - avgDelta).abs() / avgDelta;
-    
-    // If variance is less than 30%, it's rhythmic
-    return variance < 0.35;
+    return variance < 0.30; // Stricter rhythm requirement (30%)
   }
 
-  void _updateActivityStatus() {
+  void _manageActivityStatus() {
     int currentTime = DateTime.now().millisecondsSinceEpoch;
     int deltaSinceLastStep = currentTime - _lastStepTime;
 
+    ActivityStatus potentialNow;
     if (deltaSinceLastStep > _maxStepIntervalMs) {
-      _resetActivity();
-      return;
-    }
-
-    if (_timeIntervals.isEmpty) return;
-
-    double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
-    double stepsPerSecond = 1000 / avgDelta;
-
-    ActivityStatus newStatus;
-    if (stepsPerSecond >= 2.0) { // 2-3 steps per second
-      newStatus = ActivityStatus.running;
-    } else if (stepsPerSecond >= 0.8) { // 1-2 steps per second
-      newStatus = ActivityStatus.walking;
+      potentialNow = ActivityStatus.stopped;
+    } else if (_timeIntervals.isEmpty) {
+      potentialNow = ActivityStatus.stopped;
     } else {
-      newStatus = ActivityStatus.stationary;
+      double avgDelta = _timeIntervals.reduce((a, b) => a + b) / _timeIntervals.length;
+      double stepsPerSecond = 1000 / avgDelta;
+
+      if (stepsPerSecond >= 2.0 && stepsPerSecond <= 3.5) {
+        potentialNow = ActivityStatus.running;
+      } else if (stepsPerSecond >= 0.8 && stepsPerSecond < 2.0) {
+        potentialNow = ActivityStatus.walking;
+      } else {
+        potentialNow = ActivityStatus.stopped;
+      }
     }
 
-    if (newStatus != _currentActivity) {
-      _currentActivity = newStatus;
-      _activityController.add(_currentActivity);
+    // Confirmation Logic
+    if (potentialNow != _potentialStatus) {
+      _potentialStatus = potentialNow;
+      _patternStartTime = DateTime.now();
+    } else if (_patternStartTime != null) {
+      int confirmedDurationSeconds = DateTime.now().difference(_patternStartTime!).inSeconds;
+      
+      // RULE: Running requires 4 seconds confirmation
+      // RULE: Others require 3 seconds confirmation
+      int requiredSeconds = (potentialNow == ActivityStatus.running) ? 4 : 3;
+
+      if (confirmedDurationSeconds >= requiredSeconds) {
+        if (_currentActivity != potentialNow) {
+          _currentActivity = potentialNow;
+          _activityController.add(_currentActivity);
+        }
+      }
     }
   }
 
   void _resetActivity() {
-    if (_currentActivity != ActivityStatus.stationary) {
-      _currentActivity = ActivityStatus.stationary;
+    if (_currentActivity != ActivityStatus.stopped) {
+      _currentActivity = ActivityStatus.stopped;
       _activityController.add(_currentActivity);
     }
+    _potentialStatus = ActivityStatus.stopped;
+    _patternStartTime = null;
     _consecutiveSteps = 0;
     _timeIntervals.clear();
   }

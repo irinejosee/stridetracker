@@ -49,7 +49,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   int _todaySteps = 0;
   int _stepGoal = 10000;
-  String _status = 'Stationary';
+  String _status = 'Stopped';
   late StepDetector _stepDetector;
   StreamSubscription? _accelerometerSubscription;
   StreamSubscription? _stepSubscription;
@@ -104,8 +104,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           case ActivityStatus.running:
             _status = 'Running';
             break;
-          case ActivityStatus.stationary:
-            _status = 'Stationary';
+          case ActivityStatus.stopped:
+            _status = 'Stopped';
             break;
         }
       });
@@ -703,72 +703,115 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
 class _NeonBarChart extends StatelessWidget {
   final List<Map<String, dynamic>> history;
-  static const int maxGoal = 10000;
+  static const int weeklyGoal = 70000; // 10k/day * 7
 
   const _NeonBarChart({required this.history});
 
+  List<Map<String, dynamic>> _getWeeklyData() {
+    if (history.isEmpty) return [];
+    
+    // Group history into 7-day chunks (weeks)
+    List<Map<String, dynamic>> weeks = [];
+    for (int i = 0; i < history.length; i += 7) {
+      int end = (i + 7 > history.length) ? history.length : i + 7;
+      List<Map<String, dynamic>> weekChunk = history.sublist(i, end);
+      int totalSteps = weekChunk.fold(0, (sum, day) => sum + (day['steps'] as int));
+      
+      // Use the date of the first day in the chunk as label
+      weeks.add({
+        'week': 'W${(i / 7).toInt() + 1}',
+        'steps': totalSteps,
+        'label': 'Week ${(i / 7).toInt() + 1}'
+      });
+    }
+    // Return last 4 weeks
+    return weeks.reversed.take(4).toList().reversed.toList();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final weeklyData = _getWeeklyData();
+    
     return Container(
-      height: 180,
-      padding: const EdgeInsets.all(20),
+      height: 200,
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(28),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: history.map((day) {
-          final steps = day['steps'] as int;
-          final date = DateTime.parse(day['date']);
-          final double progress = (steps / maxGoal).clamp(0.1, 1.0);
-          
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.end,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: Container(
-                  width: 30,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        const Color(0xFFA855F7),
-                        const Color(0xFFA855F7).withOpacity(0.2),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(15),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFA855F7).withOpacity(0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
+              Text('Weekly Progress', style: GoogleFonts.outfit(fontSize: 12, color: Colors.white38, fontWeight: FontWeight.bold, letterSpacing: 1)),
+              const Icon(Icons.bar_chart_rounded, size: 16, color: Colors.white24),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: weeklyData.isEmpty 
+                ? [Center(child: Text('Not enough data', style: GoogleFonts.outfit(color: Colors.white24, fontSize: 12)))]
+                : weeklyData.map((week) {
+                  final steps = week['steps'] as int;
+                  final double progress = (steps / weeklyGoal).clamp(0.1, 1.0);
+                  
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(
+                        '${(steps / 1000).toStringAsFixed(1)}k',
+                        style: GoogleFonts.outfit(fontSize: 9, color: const Color(0xFFA855F7), fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: Container(
+                          width: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: FractionallySizedBox(
+                            heightFactor: progress,
+                            alignment: Alignment.bottomCenter,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    const Color(0xFFA855F7),
+                                    const Color(0xFFA855F7).withOpacity(0.4),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFFA855F7).withOpacity(0.2),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        week['week'],
+                        style: GoogleFonts.outfit(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold),
                       ),
                     ],
-                  ),
-                  child: FractionallySizedBox(
-                    heightFactor: progress,
-                    alignment: Alignment.bottomCenter,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFA855F7).withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                DateFormat('E').format(date).toUpperCase(),
-                style: GoogleFonts.outfit(fontSize: 10, color: Colors.white38, fontWeight: FontWeight.bold),
-              ),
-            ],
-          );
-        }).toList(),
+                  );
+                }).toList(),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1185,7 +1228,7 @@ class _NeonStatusPill extends StatelessWidget {
         icon = Icons.directions_run_rounded;
         color = const Color(0xFFE11D48); // Rose
         break;
-      case 'stationary':
+      case 'stopped':
       default:
         icon = Icons.accessibility_new_rounded;
         color = const Color(0xFFA855F7); // Purple
